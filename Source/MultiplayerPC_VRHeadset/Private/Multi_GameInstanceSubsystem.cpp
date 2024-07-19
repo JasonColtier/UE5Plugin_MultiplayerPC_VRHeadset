@@ -13,13 +13,16 @@ UMulti_SessionSubsystem::UMulti_SessionSubsystem()
 	: CreateSessionCompleteDelegate(FOnCreateSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnCreateSessionCompleted)),
 	  DestroySessionCompleteDelegate(FOnDestroySessionCompleteDelegate::CreateUObject(this, &ThisClass::OnDestroySessionCompleted)),
 	  FindSessionsCompleteDelegate(FOnFindSessionsCompleteDelegate::CreateUObject(this, &ThisClass::OnFindSessionsCompleted)),
-	  JoinSessionCompleteDelegate(FOnJoinSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnJoinSessionCompleted))
+	  JoinSessionCompleteDelegate(FOnJoinSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnJoinSessionCompleted)),
+	  StartSessionCompleteDelegate(FOnStartSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnStartSessionCompleted))
 {
 }
 
-void UMulti_SessionSubsystem::CreateSession(int32 NumberOfConnections, bool UseLan)
+void UMulti_SessionSubsystem::CreateSession(int32 NumberOfConnections, bool UseLan,TSoftObjectPtr<UWorld> MapToOpen)
 {
 	UE_LOGFMT(LogTemp, Log, "Creating session");
+
+	MapToOpenOnSessionStarted = MapToOpen;
 
 	const IOnlineSessionPtr SessionInterface = Online::GetSessionInterface(GetWorld());
 
@@ -42,10 +45,10 @@ void UMulti_SessionSubsystem::CreateSession(int32 NumberOfConnections, bool UseL
 	LastSessionSettings->bShouldAdvertise = true;
 
 
-	UE_LOGFMT(LogTemp, Log, "current world : {0}",GetWorld()->GetCurrentLevel()->GetName());
+	UE_LOGFMT(LogTemp, Log, "current world : {0}", GetWorld()->GetMapName());
 
 
-	LastSessionSettings->Set(SETTING_MAPNAME, GetWorld()->GetCurrentLevel()->GetName(), EOnlineDataAdvertisementType::ViaOnlineService);
+	LastSessionSettings->Set(SETTING_MAPNAME, GetWorld()->GetMapName(), EOnlineDataAdvertisementType::ViaOnlineService);
 
 	const ULocalPlayer* localPlayer = GetWorld()->GetFirstLocalPlayerFromController();
 
@@ -70,6 +73,11 @@ void UMulti_SessionSubsystem::OnCreateSessionCompleted(FName SessionName, bool S
 	}
 
 	OnCreateSessionCompleteEvent.Broadcast(Successful);
+
+	if (Successful)
+	{
+		StartSession();
+	}
 }
 
 
@@ -81,7 +89,7 @@ void UMulti_SessionSubsystem::DestroySession()
 
 	if (!SessionInterface.IsValid())
 	{
-		OnCreateSessionCompleteEvent.Broadcast(false);
+		OnDestroySessionCompleteEvent.Broadcast(false);
 		return;
 	}
 
@@ -107,8 +115,51 @@ void UMulti_SessionSubsystem::OnDestroySessionCompleted(FName SessionName, bool 
 	OnDestroySessionCompleteEvent.Broadcast(Successful);
 }
 
-void UMulti_SessionSubsystem::FindSessions(int32 MaxSearchResults, bool IsLANQuery)
+void UMulti_SessionSubsystem::StartSession()
 {
+	UE_LOGFMT(LogTemp, Log, "Starting session");
+
+	const IOnlineSessionPtr SessionInterface = Online::GetSessionInterface(GetWorld());
+
+	if (!SessionInterface.IsValid())
+	{
+		
+		return;
+	}
+
+	SessionInterface->AddOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegate);
+
+	if (!SessionInterface->StartSession(NAME_GameSession))
+	{
+		SessionInterface->ClearOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegateHandle);
+		OnStartSessionCompleteEvent.Broadcast(false);
+	}
+}
+
+void UMulti_SessionSubsystem::OnStartSessionCompleted(FName SessionName, bool Successful)
+{
+	UE_LOGFMT(LogTemp, Log, "Session {0} start status : {1}", SessionName, Successful);
+
+	const IOnlineSessionPtr sessionInterface = Online::GetSessionInterface(GetWorld());
+	if (sessionInterface)
+	{
+		sessionInterface->ClearOnStartSessionCompleteDelegate_Handle(StartSessionCompleteDelegateHandle);
+	}
+
+	OnStartSessionCompleteEvent.Broadcast(Successful);
+
+	if(Successful)
+	{
+		const FName LevelName = FName(*FPackageName::ObjectPathToPackageName(MapToOpenOnSessionStarted.ToString()));
+		UE_LOGFMT(LogTemp, Log, "Opening level with listen : {0}", LevelName);
+		UGameplayStatics::OpenLevel(GetWorld(), LevelName, true, "listen");
+	}
+}
+
+void UMulti_SessionSubsystem::FindSessions(int32 MaxSearchResults, bool IsLANQuery,bool ShouldLoopSearch,int DelayBetweenSearch)
+{
+	FindSessionParameters = FFindSessionParameters{MaxSearchResults,IsLANQuery,ShouldLoopSearch,DelayBetweenSearch};
+	
 	UE_LOGFMT(LogTemp, Log, "Finding session");
 
 	const IOnlineSessionPtr sessionInterface = Online::GetSessionInterface(GetWorld());
@@ -122,8 +173,8 @@ void UMulti_SessionSubsystem::FindSessions(int32 MaxSearchResults, bool IsLANQue
 		sessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegate);
 
 	LastSessionSearch = MakeShareable(new FOnlineSessionSearch());
-	LastSessionSearch->MaxSearchResults = MaxSearchResults;
-	LastSessionSearch->bIsLanQuery = IsLANQuery;
+	LastSessionSearch->MaxSearchResults = FindSessionParameters.MaxSearchResults;
+	LastSessionSearch->bIsLanQuery = FindSessionParameters.IsLANQuery;
 
 	LastSessionSearch->QuerySettings.Set(SEARCH_PRESENCE, true, EOnlineComparisonOp::Equals);
 
@@ -152,12 +203,20 @@ void UMulti_SessionSubsystem::OnFindSessionsCompleted(bool Successful)
 	if (LastSessionSearch->SearchResults.Num() <= 0 || !Successful)
 	{
 		OnFindSessionsCompleteEvent.Broadcast(TArray<FOnlineSessionSearchResult>(), Successful);
+		if(FindSessionParameters.ShouldLoopSearch)
+		{
+
+			GetWorld()->GetTimerManager().SetTimer(HandleTimerLoopSearch,[this]{
+				FindSessions(FindSessionParameters.MaxSearchResults,FindSessionParameters.IsLANQuery,FindSessionParameters.ShouldLoopSearch,FindSessionParameters.DelayBetweenSearch);
+			},FindSessionParameters.DelayBetweenSearch,false);
+		}
 		return;
-	}else
+	}
+	else
 	{
 		JoinGameSession(LastSessionSearch->SearchResults[0]);
 	}
-	
+
 	OnFindSessionsCompleteEvent.Broadcast(LastSessionSearch->SearchResults, Successful);
 }
 
@@ -196,7 +255,7 @@ void UMulti_SessionSubsystem::OnJoinSessionCompleted(FName SessionName, EOnJoinS
 
 	OnJoinGameSessionCompleteEvent.Broadcast(Result);
 
-	if(Result == EOnJoinSessionCompleteResult::Success || Result == EOnJoinSessionCompleteResult::AlreadyInSession)
+	if (Result == EOnJoinSessionCompleteResult::Success)
 	{
 		TryTravelToCurrentSession();
 	}
@@ -217,6 +276,9 @@ bool UMulti_SessionSubsystem::TryTravelToCurrentSession()
 	{
 		return false;
 	}
+
+	UE_LOGFMT(LogTemp, Log, "Connection string : {0}", connectString);
+
 
 	APlayerController* playerController = GetWorld()->GetFirstPlayerController();
 	playerController->ClientTravel(connectString, TRAVEL_Absolute);
