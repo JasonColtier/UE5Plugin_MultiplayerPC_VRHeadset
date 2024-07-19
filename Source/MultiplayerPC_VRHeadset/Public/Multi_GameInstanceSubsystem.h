@@ -10,8 +10,11 @@
 
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSOnCreateSessionComplete, bool, Successful);
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSOnDestroySessionComplete, bool, Successful);
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSOnStartSessionComplete, bool, Successful);
+
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCSOnFindSessionsComplete, const TArray<FOnlineSessionSearchResult>& SessionResults, bool Successful);
 DECLARE_MULTICAST_DELEGATE_OneParam(FCSOnJoinSessionComplete, EOnJoinSessionCompleteResult::Type Result);
 
@@ -41,11 +44,11 @@ public:
 	UMulti_SessionSubsystem();
 
 	UFUNCTION(BlueprintCallable)
-	void CreateSession(int32 NumberOfConnections,bool UseLan,TSoftObjectPtr<UWorld> MapToOpen);
+	void CreateSession(int32 NumberOfConnections, bool UseLan, TSoftObjectPtr<UWorld> MapToOpen);
 
 	UFUNCTION()
 	void StartSession();
-	
+
 	UFUNCTION(BlueprintCallable)
 	void DestroySession();
 
@@ -57,14 +60,17 @@ public:
 	/**************
  	 * Delegates to bind to, they give feedback to the caller
 	 *************/
-	
+
 	//delegate called when the session is created !
+	UPROPERTY(BlueprintAssignable)
 	FCSOnCreateSessionComplete OnCreateSessionCompleteEvent;
 
 	//called when the session started
+	UPROPERTY(BlueprintAssignable)
 	FCSOnStartSessionComplete OnStartSessionCompleteEvent;
 
 	//delegate called when the session is destroyed !
+	UPROPERTY(BlueprintAssignable)
 	FCSOnDestroySessionComplete OnDestroySessionCompleteEvent;
 
 	//when the find session function finished
@@ -74,7 +80,6 @@ public:
 	FCSOnJoinSessionComplete OnJoinGameSessionCompleteEvent;
 
 protected:
-
 	//function binded and called whend session is created
 	void OnCreateSessionCompleted(FName SessionName, bool Successful);
 
@@ -89,29 +94,44 @@ protected:
 	bool TryTravelToCurrentSession();
 
 private:
-	FOnCreateSessionCompleteDelegate CreateSessionCompleteDelegate;
-	FDelegateHandle CreateSessionCompleteDelegateHandle;
-	TSharedPtr<FOnlineSessionSettings> LastSessionSettings;
+	/**************
+	  * Delegates and their handles to receive callback from OnlineSession
+	 *************/
+
+	//@formatter:off
+	//delegate bound to the callback function i implemented
+	FOnCreateSessionCompleteDelegate	CreateSessionCompleteDelegate;
+	//handle to this delegate, to be able to remove it
+	FDelegateHandle						CreateSessionCompleteDelegateHandle;
 	
-	FOnCreateSessionCompleteDelegate DestroySessionCompleteDelegate;
-	FDelegateHandle DestroySessionCompleteDelegateHandle;
+	FOnCreateSessionCompleteDelegate	DestroySessionCompleteDelegate;
+	FDelegateHandle						DestroySessionCompleteDelegateHandle;
 
-	FOnStartSessionCompleteDelegate StartSessionCompleteDelegate;
-	FDelegateHandle StartSessionCompleteDelegateHandle;
+	FOnStartSessionCompleteDelegate		StartSessionCompleteDelegate;
+	FDelegateHandle						StartSessionCompleteDelegateHandle;
 
-	FOnFindSessionsCompleteDelegate FindSessionsCompleteDelegate;
-	FDelegateHandle FindSessionsCompleteDelegateHandle;
+	FOnFindSessionsCompleteDelegate		FindSessionsCompleteDelegate;
+	FDelegateHandle						FindSessionsCompleteDelegateHandle;
+
+	FOnJoinSessionCompleteDelegate		JoinSessionCompleteDelegate;
+	FDelegateHandle						JoinSessionCompleteDelegateHandle;
+	//@formatter:on
+
+	//search session parameters
 	TSharedPtr<FOnlineSessionSearch> LastSessionSearch;
 
-	FOnJoinSessionCompleteDelegate JoinSessionCompleteDelegate;
-	FDelegateHandle JoinSessionCompleteDelegateHandle;
+	//creation session parameters
+	TSharedPtr<FOnlineSessionSettings> LastSessionSettings;
 
+	//the map that will be opened once the session is created with "listen"
 	UPROPERTY(meta=(Untracked))
 	TSoftObjectPtr<UWorld> MapToOpenOnSessionStarted;
 
+	//the parameters used to find the session
 	UPROPERTY()
 	FFindSessionParameters FindSessionParameters;
 
+	//timer handle to loop search, not looping 
 	UPROPERTY()
 	FTimerHandle HandleTimerLoopSearch;
 };
